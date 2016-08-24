@@ -1,0 +1,185 @@
+---
+title: "Predicting barbell lifts activity"
+author: "Christopher Jung"
+date: "23 August 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict whether barbell lifts were performed correctly (across 5 different types of error classifications).
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Getting the data
+First we downloaded the data.
+
+```{r cars}
+## download the data
+url_train <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+dest_train <- "D:/Users/80027138/Data/Coursera/training.csv"
+
+url_test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+dest_test <- "D:/Users/80027138/Data/Coursera/testing.csv"
+
+if(!file.exists(dest_train)) download.file(url = url_train , destfile = dest_train)
+if(!file.exists(dest_test)) download.file(url = url_test , destfile = dest_test)
+
+```
+
+We then loaded the data into R.
+
+```{r}
+## load the csv files
+training <- read.csv(file =dest_train, header = TRUE, na.strings = c("NA",""))
+testing <- read.csv(file =dest_test, header = TRUE, na.strings = c("NA",""))
+
+```
+
+## Basic data cleaning
+
+Before carrying out the analysis, we performed some basic data cleaning, such as removing columns with NA's and getting rid of unwanted columns (as they are meta-data rather than recorded data).
+
+First we note that some columns seem to have mostly NA values in them (approx. 98% of values).
+
+```{r}
+## get the percentage of NA's per column
+colSums(is.na(training))/nrow(training)
+
+```
+
+We removed these columns for the analysis.
+
+```{r}
+## get the index of all cols with NA's
+isna <- which(colSums(is.na(training))/nrow(training) >0)
+
+## remove the columns with mostly NA's from train and test data
+train <- training[,-isna] 
+test  <- testing[,-isna] 
+
+```
+
+A number of variables in the data describe the user rather than being measutrements of the activity. These variables were excluded from the data.
+
+```{r}
+## define further columns to remove as they constitute metadata
+## these will not be used in the prediction model 
+ismetadata <- c("X", 
+                "user_name", 
+                "raw_timestamp_part_1", 
+                "raw_timestamp_part_2", "cvtd_timestamp",
+                "new_window",
+                "num_window")
+
+## remove the unnecessary columns
+train <- train[,!names(train) %in% ismetadata] 
+test  <- test[,!names(test) %in% ismetadata] 
+```
+
+## Creating a validation set
+
+To cross validate our model we created a validation set. 
+
+```{r}
+## create a validation set
+library(caret)
+set.seed(080782)
+intrain <- createDataPartition(y = train$classe, p = .7, list=FALSE)
+valid <- train[-intrain, ]  
+train <- train[intrain, ]    
+```
+
+The resulting datasets had 53 variables, of which 52 are measurement variables and one is the `classe` variable. The training set had a total sample of 13,737, the validation set 5,885, and the straining set 20.
+
+```{r}
+## get the sample sizes
+dim(train) 
+dim(valid)
+dim(test)
+```
+
+## Variable correlation
+
+Before running the model, we looked at the correlation of the vairables.
+
+```{r}
+# plot the correlations between variables
+library(corrplot)
+i <- which(names(train) == c("classe"))
+cormatrix <- cor(train[,-i])
+corrplot(cormatrix, 
+         method="square",
+         order = "hclust",
+         type = "lower",
+         tl.cex = .6,
+         tl.col = 1)
+```
+
+By looking at the correlation plt it became quite apparent that some variables seem highly correlated. 
+
+## Variable reduction
+
+As we have a lot of variables with some of them correlated, an obvious choice is to reduce the variable set using principal component analysis, which should lead to only a minor loss of information. For the purpose of this excercise we set the PCA to explain 90% of the variance in the data.
+
+```{r}
+# run a principal component analysis
+pca <- preProcess(train[,-i], method = "pca", thresh =.90)
+
+```
+
+We then applied the variable reduction to the test, validation and training sets.
+
+```{r}
+#apply the pca to the training and validation set
+trainPCA <- predict(pca, train[,-i])
+trainPCA$classe <- train$classe
+validPCA <- predict(pca, valid[,-i])
+validPCA$classe <- valid$classe
+testPCA <- predict(pca, test[,-i])
+testPCA$classe <- test$classe
+```
+
+## Running the prediction algorithm
+
+With a reduced dataset, we performed a random forest prediction model. Random forsts tend to produce very accurate results, and as our dataset has been reduced through PCA, the algorithm does not run for too long.
+
+We used the cross validation method to reduce the time it takes to run the model.
+```{r}
+## run the random forests prediction algorithm
+model <- train(classe~ .,
+                data=trainPCA,
+                method="rf",
+                trControl = trainControl(method = "cv", number = 5))
+```
+
+
+## Cross validation
+
+To estimate the out of sample error we used the validation set we created.
+
+```{r}
+validPredict <- predict(model, validPCA)
+conf <- confusionMatrix(validPCA$classe, validPredict)
+conf
+
+accur <- postResample(validPCA$classe, validPredict)[[1]]
+accur
+```
+
+Our analysis showed that the expected accuracy of the model is of 97.6% - or an out of sample eror of approx. 2.4%.
+
+## Predicting values
+
+We then used the test set of 20 observations to predict the classe variable.
+```{r}
+## apply the prediction algorithm to the test data
+predict(model, predict(pca, test[,-i]))
+
+```
